@@ -177,7 +177,7 @@ use honeycomb_core::cmap::OrbitPolicy;
 pub struct IsIrregular(pub bool);
 
 impl AttributeUpdate for IsIrregular {
-    fn merge(attr1: Self, attr2: Self) -> Result<Self, AttributeError> {
+    fn merge(attr1: Self, _attr2: Self) -> Result<Self, AttributeError> {
         Ok(attr1)
     }
 
@@ -196,7 +196,7 @@ impl AttributeBind for IsIrregular {
 pub struct GeoVertices(pub (u32, u32));
 
 impl AttributeUpdate for GeoVertices {
-    fn merge(attr1: Self, attr2: Self) -> Result<Self, AttributeError> {
+    fn merge(attr1: Self, _attr2: Self) -> Result<Self, AttributeError> {
         Ok(attr1)
     }
 
@@ -215,7 +215,7 @@ impl AttributeBind for GeoVertices {
 pub struct SiblingDartId(pub u32);
 
 impl AttributeUpdate for SiblingDartId {
-    fn merge(attr1: Self, attr2: Self) -> Result<Self, AttributeError> {
+    fn merge(attr1: Self, _attr2: Self) -> Result<Self, AttributeError> {
         Ok(attr1)
     }
 
@@ -234,7 +234,7 @@ impl AttributeBind for SiblingDartId {
 pub struct RefinementLevel(pub u16);
 
 impl AttributeUpdate for RefinementLevel {
-    fn merge(attr1: Self, attr2: Self) -> Result<Self, AttributeError> {
+    fn merge(attr1: Self, _attr2: Self) -> Result<Self, AttributeError> {
         Ok(attr1)
     }
 

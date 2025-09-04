@@ -3,8 +3,34 @@
 use std::collections::HashSet;
 
 use honeycomb_core::geometry::CoordsFloat;
+use thiserror::Error;
+use vtkio::Vtk;
 
-use crate::{model::Geometry2, OverlayGridError};
+use crate::model::Geometry2;
+
+use crate::model::{GeoVertices, IsIrregular, RefinementLevel, SiblingDartId};
+use honeycomb_core::{
+    cmap::{CMap2, CMapBuilder},
+    geometry::Vertex2,
+};
+
+#[derive(Error, Debug)]
+/// Errors that can occur during overlay grid operations
+pub enum OverlayGridError {
+    /// An orientation issue has been detected in the input geometry.
+    #[error("boundary isn't consistently oriented - {0}")]
+    InconsistentOrientation(&'static str),
+    /// The specified geometry does not match one (or more) requirements of the algorithm.
+    #[error("input shape isn't conform to requirements - {0}")]
+    InvalidShape(&'static str),
+    /// The VTK file used to try to build a `Geometry2` object contains invalid data
+    /// (per VTK's specification).
+    #[error("invalid/corrupted data in the vtk file - {0}")]
+    BadVtkData(&'static str),
+    /// The VTK file used to try to build a `Geometry2` object contains valid but unsupported data.
+    #[error("unsupported data in the vtk file - {0}")]
+    UnsupportedVtkData(&'static str),
+}
 
 /// Check for orientation issue **per boundary**.
 ///
@@ -65,4 +91,101 @@ pub fn compute_overlapping_grid_size<T: CoordsFloat>(
     Ok([max_x, max_y, min_x, min_y])
 }
 
-//Create a first cell from the overlapping grid size
+pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
+    let geo_verts = vec![
+        Vertex2::<T>(T::from(0.56).unwrap(), T::from(0.48).unwrap()),
+        Vertex2::<T>(T::from(3.68).unwrap(), T::from(0.40).unwrap()),
+        Vertex2::<T>(T::from(0.40).unwrap(), T::from(3.52).unwrap()),
+        Vertex2::<T>(T::from(3.60).unwrap(), T::from(3.60).unwrap()),
+        Vertex2::<T>(T::from(2.08).unwrap(), T::from(1.92).unwrap()),
+        Vertex2::<T>(T::from(1.12).unwrap(), T::from(2.88).unwrap()),
+        Vertex2::<T>(T::from(3.12).unwrap(), T::from(0.88).unwrap()),
+        //Vertex2::<T>(T::from(0.01).unwrap(), T::from(0.01).unwrap()),
+    ];
+
+    // --- BUILD THE CMap2
+    let map: CMap2<T> = CMapBuilder::<2, _>::from_n_darts(4)
+        .add_attribute::<IsIrregular>()
+        .add_attribute::<GeoVertices>()
+        .add_attribute::<SiblingDartId>()
+        .add_attribute::<RefinementLevel>()
+        .build()
+        .unwrap();
+
+    map.force_link::<1>(1, 2).unwrap();
+    map.force_link::<1>(2, 3).unwrap();
+    map.force_link::<1>(3, 4).unwrap();
+    map.force_link::<1>(4, 1).unwrap();
+
+    map.force_write_vertex(1, Vertex2(T::from(0.0).unwrap(), T::from(0.0).unwrap()));
+    map.force_write_vertex(2, Vertex2(T::from(4.0).unwrap(), T::from(0.0).unwrap()));
+    map.force_write_vertex(3, Vertex2(T::from(4.0).unwrap(), T::from(4.0).unwrap()));
+    map.force_write_vertex(4, Vertex2(T::from(0.0).unwrap(), T::from(4.0).unwrap()));
+
+    map.force_write_attribute::<GeoVertices>(1, GeoVertices((0u32, geo_verts.len() as u32)));
+    map.force_write_attribute::<RefinementLevel>(1, RefinementLevel(0));
+
+    (map, geo_verts)
+}
+
+pub fn vtk_grid<T: CoordsFloat>(
+    file_path: &str,
+) -> Result<(CMap2<T>, Vec<Vertex2<T>>), OverlayGridError> {
+    // --- IMPORT VTK INPUT
+    let geometry_vtk = match Vtk::import(file_path) {
+        Ok(vtk) => vtk,
+        Err(e) => panic!("E: could not open specified vtk file - {e}"),
+    };
+    //----/
+
+    // --- BUILD OUR MODEL FROM THE VTK IMPORT
+    let geometry = Geometry2::<T>::try_from(geometry_vtk)?;
+    //----/
+
+    // --- FIRST DETECTION OF ORIENTATION ISSUES
+    detect_orientation_issue(&geometry)?;
+    //----/
+
+    // --- Overlapping grid size computation
+    let [max_x, max_y, min_x, min_y] = compute_overlapping_grid_size(&geometry)?;
+    let _quadtree_bounds = [min_x, min_y, max_x, max_y];
+    let width = max_x - min_x;
+    let height = max_y - min_y;
+
+    let padding_factor = T::from(0.1).unwrap();
+    let x_padding = width * padding_factor;
+    let y_padding = height * padding_factor;
+
+    let grid_min_x = min_x - x_padding;
+    let grid_max_x = max_x + x_padding;
+    let grid_min_y = min_y - y_padding;
+    let grid_max_y = max_y + y_padding;
+
+    // Extract geo vertices from the geometry
+    let geo_verts = geometry.vertices;
+
+    // --- BUILD THE CMap2
+    let map: CMap2<T> = CMapBuilder::<2, _>::from_n_darts(4)
+        .add_attribute::<IsIrregular>()
+        .add_attribute::<GeoVertices>()
+        .add_attribute::<SiblingDartId>()
+        .add_attribute::<RefinementLevel>()
+        .build()
+        .unwrap();
+
+    map.force_link::<1>(1, 2).unwrap();
+    map.force_link::<1>(2, 3).unwrap();
+    map.force_link::<1>(3, 4).unwrap();
+    map.force_link::<1>(4, 1).unwrap();
+
+    // Set vertices based on geometry bounds with padding
+    map.force_write_vertex(1, Vertex2(grid_min_x, grid_min_y)); // Bottom-left
+    map.force_write_vertex(2, Vertex2(grid_max_x, grid_min_y)); // Bottom-right
+    map.force_write_vertex(3, Vertex2(grid_max_x, grid_max_y)); // Top-right
+    map.force_write_vertex(4, Vertex2(grid_min_x, grid_max_y)); // Top-left
+
+    map.force_write_attribute::<GeoVertices>(1, GeoVertices((0u32, geo_verts.len() as u32)));
+    map.force_write_attribute::<RefinementLevel>(1, RefinementLevel(0));
+
+    Ok((map, geo_verts))
+}
