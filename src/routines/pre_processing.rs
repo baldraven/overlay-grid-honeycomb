@@ -2,14 +2,14 @@
 
 use std::collections::HashSet;
 
-use honeycomb_core::geometry::CoordsFloat;
+use honeycomb::core::geometry::CoordsFloat;
 use thiserror::Error;
 use vtkio::Vtk;
 
 use crate::model::Geometry2;
 
 use crate::model::{GeoVertices, IsIrregular, RefinementLevel, SiblingDartId};
-use honeycomb_core::{
+use honeycomb::core::{
     cmap::{CMap2, CMapBuilder},
     geometry::Vertex2,
 };
@@ -93,14 +93,11 @@ pub fn compute_overlapping_grid_size<T: CoordsFloat>(
 
 pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
     let geo_verts = vec![
-        Vertex2::<T>(T::from(0.56).unwrap(), T::from(0.48).unwrap()),
-        Vertex2::<T>(T::from(3.68).unwrap(), T::from(0.40).unwrap()),
-        Vertex2::<T>(T::from(0.40).unwrap(), T::from(3.52).unwrap()),
-        Vertex2::<T>(T::from(3.60).unwrap(), T::from(3.60).unwrap()),
-        Vertex2::<T>(T::from(2.08).unwrap(), T::from(1.92).unwrap()),
-        Vertex2::<T>(T::from(1.12).unwrap(), T::from(2.88).unwrap()),
-        Vertex2::<T>(T::from(3.12).unwrap(), T::from(0.88).unwrap()),
-        //Vertex2::<T>(T::from(0.01).unwrap(), T::from(0.01).unwrap()),
+        Vertex2::<T>(T::from(1.).unwrap(), T::from(1.).unwrap()),
+        Vertex2::<T>(T::from(3.).unwrap(), T::from(3.).unwrap()),
+        Vertex2::<T>(T::from(1.).unwrap(), T::from(3.).unwrap()),
+        Vertex2::<T>(T::from(3.).unwrap(), T::from(1.).unwrap()),
+        Vertex2::<T>(T::from(2.).unwrap(), T::from(2.).unwrap()),
     ];
 
     // --- BUILD THE CMap2

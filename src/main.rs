@@ -1,6 +1,6 @@
 use std::env;
 
-use honeycomb_render::render_2d_map;
+use honeycomb::render::render_2d_map;
 use overlay_grid::*;
 
 fn main() {

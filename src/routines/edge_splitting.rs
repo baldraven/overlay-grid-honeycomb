@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::model::{GeoVertices, IsIrregular, RefinementLevel, SiblingDartId};
-use honeycomb_core::{
+use honeycomb::core::{
     cmap::{CMap2, NULL_DART_ID},
     geometry::{CoordsFloat, Vertex2},
 };
@@ -106,10 +106,13 @@ pub fn refine_with_pairing<T: CoordsFloat>(
     let face3 = map.force_read_attribute::<SiblingDartId>(face2).unwrap().0;
     let face4 = map.force_read_attribute::<SiblingDartId>(face3).unwrap().0;
 
-    let children1 = refine_cell(map, face1, geo_verts, balance_pile);
-    let children2 = refine_cell(map, face2, geo_verts, balance_pile);
-    let children3 = refine_cell(map, face3, geo_verts, balance_pile);
-    let children4 = refine_cell(map, face4, geo_verts, balance_pile);
+    // Mark the future unbalance
+    update_balance_pile_for_neighbors(face1, face2, face3, face4, map, balance_pile);
+
+    let children1 = refine_cell(map, face1, geo_verts);
+    let children2 = refine_cell(map, face2, geo_verts);
+    let children3 = refine_cell(map, face3, geo_verts);
+    let children4 = refine_cell(map, face4, geo_verts);
 
     vec![children1, children2, children3, children4]
 }
@@ -120,109 +123,81 @@ pub fn refine_cell<T: CoordsFloat>(
     map: &mut CMap2<T>,
     working_dart: u32,
     geo_verts: &mut [Vertex2<T>],
-    balance_pile: &mut VecDeque<u32>,
 ) -> u32 {
     let face_id = map.face_id(working_dart);
     let face_darts = collect_face_darts(map, working_dart);
     assert_eq!(face_darts.len(), 4, "E: face darts count is not 4");
 
-    // Step 1: Update balance pile with neighbors that need balancing
-    update_balance_pile_for_neighbors(map, face_id, &face_darts, balance_pile);
-
     // Step 2: Prepare geo vertices distribution
-    let parent_geo_range = get_parent_geo_range(map, face_id);
+    let parent_geo_range = map
+        .force_read_attribute::<GeoVertices>(face_id)
+        .unwrap_or(GeoVertices((0, 0)))
+        .0;
+    map.force_remove_attribute::<GeoVertices>(face_id); // children would wrongly inherit it otherwise
+
     let quadrant_ranges =
-        prepare_geo_vertices_for_subdivision(map, geo_verts, &face_darts, parent_geo_range);
+        distribute_geo_vertices_to_quadrants(map, &face_darts, geo_verts, parent_geo_range);
 
     // Step 3: Perform the actual cell subdivision
     perform_cell_subdivision(map, &face_darts);
 
     // Step 4: Update child cell attributes and find cells needing further refinement
-
     update_child_cell_attributes(map, &face_darts, &quadrant_ranges, face_id)
 }
 
 /// Updates the balance pile with neighboring cells that need balancing
+/// TODO: simplify this step which might not be needed anymore
 fn update_balance_pile_for_neighbors<T: CoordsFloat>(
+    face1: u32,
+    face2: u32,
+    face3: u32,
+    face4: u32,
     map: &CMap2<T>,
-    face_id: u32,
-    face_darts: &[u32],
     balance_pile: &mut VecDeque<u32>,
 ) {
     let current_depth = map
-        .force_read_attribute::<RefinementLevel>(face_id)
+        .force_read_attribute::<RefinementLevel>(face1)
         .unwrap()
         .0;
 
-    for &dart in face_darts {
-        let opposite = map.beta::<2>(dart);
-        if opposite == NULL_DART_ID {
-            continue;
-        }
+    let mut balance_stack = Vec::new();
 
-        let opposite_depth = map
-            .force_read_attribute::<RefinementLevel>(map.face_id(opposite))
-            .unwrap()
-            .0;
+    for i in 0..4 {
+        for dart in map.i_cell::<2>(match i {
+            0 => face1,
+            1 => face2,
+            2 => face3,
+            3 => face4,
+            _ => unreachable!(),
+        }) {
+            let opposite = map.beta::<2>(dart);
+            if opposite == NULL_DART_ID {
+                continue;
+            }
 
-        if current_depth > opposite_depth {
-            add_to_balance_pile_if_not_exists(map, opposite, balance_pile);
+            let opposite_depth = map
+                .force_read_attribute::<RefinementLevel>(map.face_id(opposite))
+                .unwrap()
+                .0;
+
+            if current_depth > opposite_depth {
+                balance_stack.push(map.face_id(opposite));
+            }
         }
     }
+
+    balance_stack.sort();
+    balance_stack.dedup();
+
+    balance_pile.extend(balance_stack);
 }
 
-/// Adds a face to the balance pile if no sibling is already present
-fn add_to_balance_pile_if_not_exists<T: CoordsFloat>(
+/// Distributes geo vertices into 4 quadrants by sorting them in place
+/// Returns the (start_index, length) tuple for each quadrant
+fn distribute_geo_vertices_to_quadrants<T: CoordsFloat>(
     map: &CMap2<T>,
-    opposite_dart: u32,
-    balance_pile: &mut VecDeque<u32>,
-) {
-    // Check if any sibling of this opposite face is already in the balance pile
-    // TODO: find a more efficient way of doing this
-    // because we don't want to add 2 siblings in the balance pile
-    let opposite_face_id = map.face_id(opposite_dart);
-
-    if !is_any_sibling_in_balance_pile(map, opposite_face_id, balance_pile) {
-        balance_pile.push_back(opposite_dart);
-    }
-}
-
-/// Checks if any of the 4 siblings is already in the balance pile
-fn is_any_sibling_in_balance_pile<T: CoordsFloat>(
-    map: &CMap2<T>,
-    face_id: u32,
-    balance_pile: &VecDeque<u32>,
-) -> bool {
-    let mut current_sibling = face_id;
-
-    for _ in 0..4 {
-        if balance_pile
-            .iter()
-            .any(|&dart| map.face_id(dart) == current_sibling)
-        {
-            return true;
-        }
-        current_sibling = map
-            .force_read_attribute::<SiblingDartId>(current_sibling)
-            .unwrap()
-            .0;
-    }
-
-    false
-}
-
-/// Gets the geo vertices range for the current cell
-fn get_parent_geo_range<T: CoordsFloat>(map: &CMap2<T>, face_id: u32) -> (u32, u32) {
-    map.force_read_attribute::<GeoVertices>(face_id)
-        .map(|range| range.0)
-        .unwrap_or((0, 0))
-}
-
-/// Prepares geo vertices distribution into quadrants for the child cells
-fn prepare_geo_vertices_for_subdivision<T: CoordsFloat>(
-    map: &CMap2<T>,
-    geo_verts: &mut [Vertex2<T>],
     face_darts: &[u32],
+    geo_verts: &mut [Vertex2<T>],
     parent_range: (u32, u32),
 ) -> [(u32, u32); 4] {
     if parent_range.1 == 0 {
@@ -235,7 +210,42 @@ fn prepare_geo_vertices_for_subdivision<T: CoordsFloat>(
     let cell_max = dart_origin(map, face_darts[2]);
     let midpoint = Vertex2::<T>::average(&cell_min, &cell_max);
 
-    distribute_geo_vertices_to_quadrants(geo_verts, parent_range, &midpoint)
+    let start = parent_range.0 as usize;
+    let end = start + parent_range.1 as usize;
+
+    // Extract the slice we're working with
+    let slice = &mut geo_verts[start..end];
+
+    // Sort vertices into quadrants: bottom-left, bottom-right, top-right, top-left
+    slice.sort_by(|a, b| {
+        let quadrant_position1 = get_quadrant(a, &midpoint);
+        let quadrant_position2 = get_quadrant(b, &midpoint);
+        quadrant_position1.cmp(&quadrant_position2)
+    });
+
+    // Count vertices in each quadrant
+    let mut quadrant_counts = [0u32; 4];
+    for vertex in slice.iter() {
+        let quadrant = get_quadrant(vertex, &midpoint);
+        quadrant_counts[quadrant] += 1;
+    }
+
+    assert_eq!(
+        quadrant_counts.iter().sum::<u32>(),
+        parent_range.1,
+        "E: quadrant counts do not sum to parent range length"
+    );
+
+    // Calculate ranges for each quadrant
+    let mut current_start = start as u32;
+    let mut quadrant_ranges = [(0u32, 0u32); 4];
+
+    for i in 0..4 {
+        quadrant_ranges[i] = (current_start, quadrant_counts[i]);
+        current_start += quadrant_counts[i];
+    }
+
+    quadrant_ranges
 }
 
 /// State tracking for subdivision process
@@ -360,61 +370,4 @@ fn update_child_cell_attributes<T: CoordsFloat>(
     }
 
     child_needing_refinement
-}
-
-/// Distributes geo vertices into 4 quadrants by sorting them in place
-/// Returns the (start_index, length) tuple for each quadrant
-fn distribute_geo_vertices_to_quadrants<T: CoordsFloat>(
-    geo_verts: &mut [Vertex2<T>],
-    parent_range: (u32, u32),
-    midpoint: &Vertex2<T>,
-) -> [(u32, u32); 4] {
-    let start = parent_range.0 as usize;
-    let end = start + parent_range.1 as usize;
-
-    if start >= geo_verts.len() || end > geo_verts.len() {
-        return [(0, 0), (0, 0), (0, 0), (0, 0)];
-    }
-
-    // Extract the slice we're working with
-    let slice = &mut geo_verts[start..end];
-
-    // Sort vertices into quadrants: bottom-left, bottom-right, top-right, top-left
-    slice.sort_by(|a, b| {
-        let a_quadrant = get_quadrant(a, midpoint);
-        let b_quadrant = get_quadrant(b, midpoint);
-        a_quadrant.cmp(&b_quadrant)
-    });
-
-    // Count vertices in each quadrant
-    let mut quadrant_counts = [0u32; 4];
-    for vertex in slice.iter() {
-        let quadrant = get_quadrant(vertex, midpoint);
-        quadrant_counts[quadrant] += 1;
-    }
-
-    // Calculate ranges for each quadrant
-    let mut current_start = start as u32;
-    let mut quadrant_ranges = [(0u32, 0u32); 4];
-
-    for i in 0..4 {
-        quadrant_ranges[i] = (current_start, quadrant_counts[i]);
-        current_start += quadrant_counts[i];
-    }
-
-    quadrant_ranges
-}
-
-/// Determines which quadrant a vertex belongs to relative to a midpoint
-/// Returns: 0=bottom-left, 1=bottom-right, 2=top-right, 3=top-left
-fn get_quadrant<T: CoordsFloat>(vertex: &Vertex2<T>, midpoint: &Vertex2<T>) -> usize {
-    let x_right = vertex.x() >= midpoint.x();
-    let y_top = vertex.y() >= midpoint.y();
-
-    match (x_right, y_top) {
-        (false, false) => 0, // bottom-left
-        (true, false) => 1,  // bottom-right
-        (true, true) => 2,   // top-right
-        (false, true) => 3,  // top-left
-    }
 }

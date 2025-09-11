@@ -1,6 +1,6 @@
 use super::*;
-use crate::{model::Geometry2, routines::compute_overlapping_grid_size};
-use honeycomb_core::{cmap::CMapBuilder, geometry::Vertex2};
+use crate::{model::Geometry2, routines::*};
+use honeycomb::core::{cmap::CMapBuilder, geometry::Vertex2};
 
 #[test]
 fn test_collect_face_darts_quad() {

@@ -1,5 +1,5 @@
 use crate::model::IsIrregular;
-use honeycomb_core::{
+use honeycomb::core::{
     cmap::{CMap2, NULL_DART_ID},
     geometry::{CoordsFloat, Vertex2},
 };
@@ -32,6 +32,7 @@ pub fn is_regular<T: CoordsFloat>(map: &CMap2<T>, dart: u32) -> bool {
 }
 
 /// Collects all darts non-irregular in a face by following the beta1 relation
+/// Make sure geometrically that first dart is south-west, useful for the geo_vertices distribution
 pub fn collect_face_darts<T: CoordsFloat>(map: &CMap2<T>, start_dart: u32) -> Vec<u32> {
     let mut face_darts = Vec::new();
 
@@ -50,5 +51,31 @@ pub fn collect_face_darts<T: CoordsFloat>(map: &CMap2<T>, start_dart: u32) -> Ve
             break;
         }
     }
-    face_darts
+
+    // order the darts so the first face_dart is in SW quadrant
+    let pos0 = dart_origin(map, face_darts[0]);
+    let pos2 = dart_origin(map, face_darts[2]);
+    let midpoint = Vertex2::<T>::average(&pos0, &pos2);
+    let mut face_darts_ordered = vec![0u32; 4];
+    for dart in face_darts.iter() {
+        let pos = dart_origin(map, *dart);
+        let quadrant = get_quadrant(&pos, &midpoint);
+        face_darts_ordered[quadrant] = *dart;
+    }
+
+    face_darts_ordered
+}
+
+/// Determines which quadrant a vertex belongs to relative to a midpoint
+/// Returns: 0=bottom-left, 1=bottom-right, 2=top-right, 3=top-left
+pub fn get_quadrant<T: CoordsFloat>(vertex: &Vertex2<T>, midpoint: &Vertex2<T>) -> usize {
+    let x_right = vertex.x() >= midpoint.x();
+    let y_top = vertex.y() >= midpoint.y();
+
+    match (x_right, y_top) {
+        (false, false) => 0, // bottom-left
+        (true, false) => 1,  // bottom-right
+        (true, true) => 2,   // top-right
+        (false, true) => 3,  // top-left
+    }
 }

@@ -10,9 +10,8 @@ repository = "https://github.com/your-org/overlay_grid"
 readme = "README.md"
 
 [dependencies]
-honeycomb-core = "0.9.0"
-honeycomb-kernels = "0.9.0"
-honeycomb-render = "0.9.0"
+# [dependencies]
+honeycomb = { git = "https://github.com/LIHPC-Computational-Geometry/honeycomb", rev = "0ffd41c", features = ["render"]}
 thiserror = "1.0"
 vtkio = "0.6"
 morton-encoding = "2.0"
@@ -20,3 +19,7 @@ num-traits = "0.2"
 
 [features]
 default = []
+
+[profile.profiling]
+inherits = "release"
+debug = true

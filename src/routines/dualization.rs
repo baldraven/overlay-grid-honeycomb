@@ -1,6 +1,6 @@
 use crate::routines::helpers::dart_origin;
-use honeycomb_core::cmap::{CMap2, CMapBuilder, NULL_DART_ID};
-use honeycomb_core::geometry::{CoordsFloat, Vertex2};
+use honeycomb::core::cmap::{CMap2, CMapBuilder, NULL_DART_ID};
+use honeycomb::core::geometry::{CoordsFloat, Vertex2};
 use std::collections::{HashMap, HashSet};
 
 /// Iterates on the primal vertices to create a new dual cell around it
@@ -13,19 +13,33 @@ pub fn dualize_map<T: CoordsFloat>(map: &CMap2<T>) -> CMap2<T> {
     // primal_face_id, says if we already created a dual vertex for it
     let mut vertices_hashset: HashSet<u32> = HashSet::new();
 
-    // Step 2: For each vertex in original map, create a dual face
-    for vertex_id in map.iter_vertices() {
-        // Get all faces around this vertex in order
-        let adjacent_primal_vertices = get_adjacent_vertices(map, vertex_id);
+    // Collect vertices with their adjacent vertices, filtering out boundary vertices
+    let vertex_data: Vec<(u32, Vec<u32>)> = map
+        .iter_vertices()
+        .map(|vertex_id| (vertex_id, get_adjacent_vertices(map, vertex_id)))
+        .filter(|(_, adj_vertices)| adj_vertices.len() >= 3)
+        .collect();
 
-        // Skip boundary vertices
+    // Allocate darts based on actual non-boundary vertex count
+    let dual_dart_count = vertex_data.len() * 4;
+    dual_map.allocate_used_darts(dual_dart_count);
+
+    let iter_vertices_zipped =
+        vertex_data
+            .into_iter()
+            .scan(0, |state, (vertex_id, adj_vertices)| {
+                let current = *state;
+                *state += 4;
+                Some((vertex_id, adj_vertices, current + 1))
+            });
+
+    // Step 2: For each vertex in original map, create a dual face
+    for (vertex_id, adjacent_primal_vertices, new_dart) in iter_vertices_zipped {
         if adjacent_primal_vertices.len() < 3 {
-            continue;
+            panic!("Boundary vertex encountered unexpectedly");
         }
         // We should only have quads now
-        assert_eq!(adjacent_primal_vertices.len(), 4);
-
-        let new_dart = dual_map.allocate_used_darts(4);
+        //assert_eq!(adjacent_primal_vertices.len(), 4);
 
         // If opposite exists we beta2 link to it
         // and write centroid if doesnt exist

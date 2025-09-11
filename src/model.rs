@@ -2,7 +2,7 @@
 //!
 //! This module contains data structures for representing geometry and related operations.
 
-use honeycomb_core::{
+use honeycomb::core::{
     cmap::{DartIdType, FaceIdType},
     geometry::{CoordsFloat, Vertex2},
 };
@@ -170,8 +170,8 @@ impl<T: CoordsFloat> TryFrom<Vtk> for Geometry2<T> {
     }
 }
 
-use honeycomb_core::attributes::{AttrSparseVec, AttributeBind, AttributeError, AttributeUpdate};
-use honeycomb_core::cmap::OrbitPolicy;
+use honeycomb::core::attributes::{AttrSparseVec, AttributeBind, AttributeError, AttributeUpdate};
+use honeycomb::core::cmap::OrbitPolicy;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct IsIrregular(pub bool);

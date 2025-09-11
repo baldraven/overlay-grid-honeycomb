@@ -2,15 +2,12 @@ pub(crate) mod model;
 pub(crate) mod routines;
 
 use crate::routines::{
-        dualization::dualize_map, pre_processing::*,
-        refinement_balance::refinement, regularisation::regularize_map,
-    };
-use honeycomb_core::{
-    cmap::CMap2,
-    geometry::CoordsFloat,
+    dualization::dualize_map, pre_processing::*, refinement_balance::refinement,
+    regularisation::regularize_map,
 };
+use honeycomb::core::{cmap::CMap2, geometry::CoordsFloat};
 
-const MAX_DEPTH: u32 = 3;
+const MAX_DEPTH: u32 = 6;
 
 #[allow(clippy::needless_pass_by_value)]
 /// Create an overlay grid from a VTK file input
@@ -26,9 +23,20 @@ pub fn overlay_grid<T: CoordsFloat>(
         vtk_grid::<T>(&file_path_str)?
     };
 
+    let t0 = std::time::Instant::now();
     refinement(&mut map, &mut geo_verts, MAX_DEPTH)?;
+    let t_ref = t0.elapsed();
+    println!("refinement took {:.3} s", t_ref.as_secs_f64());
+
+    let t1 = std::time::Instant::now();
     regularize_map(&mut map);
+    let t_reg = t1.elapsed();
+    println!("regularize_map took {:.3} s", t_reg.as_secs_f64());
+
+    let t2 = std::time::Instant::now();
     let dual_map = dualize_map(&map);
+    let t_dual = t2.elapsed();
+    println!("dualize_map took {:.3} s", t_dual.as_secs_f64());
 
     Ok(dual_map)
 }

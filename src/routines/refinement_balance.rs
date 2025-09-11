@@ -1,12 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::{
-    model::RefinementLevel,
-    routines::{
-        edge_splitting::*, helpers::*, pre_processing::*,
-    },
+    model::{RefinementLevel, SiblingDartId},
+    routines::{edge_splitting::*, pre_processing::*},
 };
-use honeycomb_core::{
+use honeycomb::core::{
     cmap::{CMap2, NULL_DART_ID},
     geometry::{CoordsFloat, Vertex2},
 };
@@ -19,22 +17,16 @@ pub fn refinement<T: CoordsFloat>(
     max_depth: u32,
 ) -> Result<(), OverlayGridError> {
     let mut balance_pile = VecDeque::new();
-
     let mut current_level = VecDeque::new();
-    let to_refine = refine_cell(map, 1, geo_verts, &mut balance_pile);
+    let to_refine = refine_cell(map, 1, geo_verts);
     current_level.push_back(to_refine);
-
-    println!("Starting refinement with 1 initial cell");
 
     // Process each refinement level
     for depth in 0..max_depth {
-        if current_level.is_empty() {
-            println!("No more cells to refine at depth {}", depth);
-            break;
-        };
+        assert_ne!(current_level.len(), 0);
 
         println!(
-            "Processing refinement level {} with {} cells",
+            "Processing refinement level {} with {} pack of cells to refine",
             depth,
             current_level.len()
         );
@@ -42,34 +34,21 @@ pub fn refinement<T: CoordsFloat>(
         let mut next_level = VecDeque::new();
 
         // Refine all cells at current level
+        // TODO: parallelize this
         while let Some(working_dart) = current_level.pop_front() {
             let parent_cells = refine_with_pairing(map, working_dart, geo_verts, &mut balance_pile);
 
             // Add children to next level
-            for child_darts in parent_cells {
-                if child_darts != 0 {
-                    next_level.push_back(child_darts);
+            for child_cell in parent_cells {
+                if child_cell != NULL_DART_ID {
+                    next_level.push_back(child_cell);
                 }
             }
         }
 
-        println!(
-            "Level {} complete. {} cells added for next level",
-            depth,
-            next_level.len()
-        );
-
         balancing(map, &mut balance_pile, geo_verts);
 
         current_level = next_level;
-    }
-
-    if !current_level.is_empty() {
-        println!(
-            "Refinement stopped at max depth {} with {} cells remaining",
-            max_depth,
-            current_level.len()
-        );
     }
 
     Ok(())
@@ -80,23 +59,53 @@ fn balancing<T: CoordsFloat>(
     balance_pile: &mut VecDeque<u32>,
     geo_verts: &mut [Vertex2<T>],
 ) {
-    while !balance_pile.is_empty() {
-        let dart = balance_pile.pop_front().unwrap();
+    let mut seen_faces: HashSet<u32> = HashSet::new();
 
-        if ensure_not_balanced(map, dart) {
-            refine_with_pairing(map, dart, geo_verts, balance_pile);
-        } else {
-            println!(
-                "Skipping balancing for dart {} as it's already scheduled for refinement",
-                dart
-            );
+    while !balance_pile.is_empty() {
+        let face_dart = map.face_id(balance_pile.pop_front().unwrap());
+        if seen_faces.contains(&face_dart) {
+            continue;
+        }
+
+        if ensure_not_balanced(map, face_dart) {
+            // gather the 4 sibling faces (first ring) and insert them into seen_faces
+            let mut first_ring = Vec::with_capacity(4);
+            let mut current_dart = map.face_id(face_dart);
+            first_ring.push(current_dart);
+            for _ in 1..4 {
+                current_dart = map
+                    .force_read_attribute::<SiblingDartId>(current_dart)
+                    .unwrap()
+                    .0;
+                first_ring.push(current_dart);
+            }
+
+            refine_with_pairing(map, face_dart, geo_verts, balance_pile);
+
+            // gather the next-level siblings (3 successors for each of the 4 faces => 12 faces)
+            let mut second_ring = Vec::with_capacity(12);
+            for &f in &first_ring {
+                let mut current_dart = f;
+                for _ in 0..3 {
+                    current_dart = map
+                        .force_read_attribute::<SiblingDartId>(current_dart)
+                        .unwrap()
+                        .0;
+                    second_ring.push(current_dart);
+                }
+            }
+            for &f in &first_ring {
+                seen_faces.insert(f);
+            }
+            for &f in &second_ring {
+                seen_faces.insert(f);
+            }
         }
     }
 }
 
 fn ensure_not_balanced<T: CoordsFloat>(map: &CMap2<T>, working_dart: u32) -> bool {
     let face_id = map.face_id(working_dart);
-    let face_darts = collect_face_darts(map, working_dart);
 
     // Get the current cell's refinement level
     let current_level = map
@@ -104,8 +113,7 @@ fn ensure_not_balanced<T: CoordsFloat>(map: &CMap2<T>, working_dart: u32) -> boo
         .unwrap()
         .0;
 
-    // Check all neighbors to see if any have a refinement level difference > 1
-    for &dart in &face_darts {
+    for dart in map.i_cell::<2>(face_id) {
         let opposite = map.beta::<2>(dart);
         if opposite == NULL_DART_ID {
             continue; // Skip boundary edges
@@ -123,5 +131,6 @@ fn ensure_not_balanced<T: CoordsFloat>(map: &CMap2<T>, working_dart: u32) -> boo
         }
     }
 
-    false // Cell is already balanced
+    println!("is already balanced");
+    false
 }

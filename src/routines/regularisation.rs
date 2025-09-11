@@ -1,13 +1,48 @@
 use std::panic;
 
 use crate::model::{IsIrregular, RefinementLevel};
-use crate::routines::helpers::dart_origin;
-use honeycomb_core::{
+use crate::routines::helpers::{dart_origin, is_regular};
+use honeycomb::core::{
     cmap::{CMap2, NULL_DART_ID},
     geometry::{CoordsFloat, Vertex2},
 };
 
-fn regularize_edge<T: CoordsFloat>(map: &mut CMap2<T>, edge_dart: u32) -> u32 {
+pub fn regularize_map<T: CoordsFloat>(map: &mut CMap2<T>) {
+    // TODO: to parallelize
+    let irregular_darts: Vec<u32> = map
+        .iter_faces()
+        .flat_map(|face| {
+            map.i_cell::<1>(face)
+                .filter(|&dart| !is_regular(map, dart))
+                .collect::<Vec<u32>>()
+        })
+        .collect();
+
+    // Each pair of irregular darts are regularized with 6 new darts
+    let start_dart_id = map.allocate_used_darts(irregular_darts.len() * 3);
+
+    // Group consecutive irregular darts into chains
+    let irregular_chains = find_consecutive_irregular_chains(map, &irregular_darts);
+
+    let chains_with_dart_ids =
+        irregular_chains
+            .into_iter()
+            .scan(start_dart_id as usize, |dart_offset, chain| {
+                let current_start = *dart_offset;
+                let darts_for_this_chain = (chain.len() / 2) * 6;
+                *dart_offset += darts_for_this_chain;
+                Some((chain, current_start as u32))
+            });
+
+    // Process each chain with its pre-allocated dart range
+    // TODO: Could parallelize this but not priority
+    for (chain, dart_counter) in chains_with_dart_ids {
+        assert_eq!(chain.len() % 2, 0, "Chain length must be even");
+        regularize_consecutive_chain(map, &chain, dart_counter);
+    }
+}
+
+fn regularize_edge<T: CoordsFloat>(map: &mut CMap2<T>, edge_dart: u32, dart1: u32) -> u32 {
     let next = map.beta::<1>(edge_dart);
     let next_next = map.beta::<1>(next);
     let prev = map.beta::<0>(edge_dart);
@@ -16,20 +51,13 @@ fn regularize_edge<T: CoordsFloat>(map: &mut CMap2<T>, edge_dart: u32) -> u32 {
     let edge_dart2 = map.beta::<1>(prev2);
 
     assert_ne!(next_opposite, NULL_DART_ID);
-    assert_eq!(
-        map.force_read_attribute::<IsIrregular>(edge_dart2).unwrap(),
-        IsIrregular(true)
-    );
-    assert_eq!(
-        map.force_read_attribute::<IsIrregular>(edge_dart).unwrap(),
-        IsIrregular(true)
-    );
+    assert!(!is_regular(map, edge_dart2));
+    assert!(!is_regular(map, edge_dart));
 
     map.force_remove_attribute::<IsIrregular>(edge_dart);
     map.force_remove_attribute::<IsIrregular>(edge_dart2);
 
-    // Allocate new darts
-    let dart1 = map.allocate_used_darts(6);
+    // Use pre-allocated darts instead of allocating new ones
     let dart2 = dart1 + 1;
     let tri_dart1 = dart1 + 2;
     let tri_dart2 = dart1 + 3;
@@ -65,28 +93,7 @@ fn regularize_edge<T: CoordsFloat>(map: &mut CMap2<T>, edge_dart: u32) -> u32 {
     map.force_link::<2>(next, dart2).unwrap();
     map.force_link::<2>(next_opposite, dart1).unwrap();
 
-    dart1
-}
-
-pub fn regularize_map<T: CoordsFloat>(map: &mut CMap2<T>) {
-    let irregular_darts: Vec<u32> = map
-        .iter_faces()
-        .flat_map(|face| {
-            map.i_cell::<1>(face)
-                .filter(|&dart| map.force_read_attribute::<IsIrregular>(dart).is_some())
-                .collect::<Vec<u32>>()
-        })
-        .collect();
-
-    // Group consecutive irregular darts into chains
-    let irregular_chains = find_consecutive_irregular_chains(map, &irregular_darts);
-
-    // Process each chain of consecutive irregular darts
-    for chain in irregular_chains {
-        if chain.len() >= 2 {
-            regularize_consecutive_chain(map, &chain);
-        }
-    }
+    dart1 + 6
 }
 
 /// Finds chains of consecutive irregular darts
@@ -178,8 +185,14 @@ fn find_prev_consecutive_irregular<T: CoordsFloat>(map: &CMap2<T>, dart: u32) ->
     Some(opposite_prev)
 }
 
-/// Regularizes a chain of consecutive irregular darts
-fn regularize_consecutive_chain<T: CoordsFloat>(map: &mut CMap2<T>, chain: &[u32]) {
+/// Regularizes a chain of consecutive irregular darts with pre-allocated dart IDs
+fn regularize_consecutive_chain<T: CoordsFloat>(
+    map: &mut CMap2<T>,
+    chain: &[u32],
+    dart_counter: u32,
+) -> u32 {
+    let mut dart_counter = dart_counter;
+
     // Process pairs within the chain, ensuring all darts get addressed
     for chunk in chain.chunks(2) {
         if chunk.len() == 2 {
@@ -191,7 +204,7 @@ fn regularize_consecutive_chain<T: CoordsFloat>(map: &mut CMap2<T>, chain: &[u32
             let level2 = map.force_read_attribute::<RefinementLevel>(map.face_id(dart2));
 
             if level1 == level2 {
-                regularize_edge(map, dart1);
+                dart_counter = regularize_edge(map, dart1, dart_counter);
             }
         } else if chunk.len() == 1 {
             panic!(
@@ -201,4 +214,5 @@ fn regularize_consecutive_chain<T: CoordsFloat>(map: &mut CMap2<T>, chain: &[u32
             );
         }
     }
+    dart_counter
 }
