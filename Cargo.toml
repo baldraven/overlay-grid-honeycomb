@@ -16,9 +16,12 @@ thiserror = "1.0"
 vtkio = "0.6"
 morton-encoding = "2.0"
 num-traits = "0.2"
+hwlocality = { version = "1.0.0-alpha.11", optional = true }
+rayon = "1.11.0"
 
 [features]
-default = []
+default = ["bind-threads"]
+bind-threads = ["dep:hwlocality"]
 
 [profile.profiling]
 inherits = "release"
