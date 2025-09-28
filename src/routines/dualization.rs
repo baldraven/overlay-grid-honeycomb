@@ -1,76 +1,72 @@
+use crate::model::B2Mapping;
 use crate::routines::helpers::dart_origin;
-use honeycomb::core::cmap::{CMap2, CMapBuilder, NULL_DART_ID};
+use honeycomb::core::cmap::{CMap2, CMapBuilder};
 use honeycomb::core::geometry::{CoordsFloat, Vertex2};
-use std::collections::{HashMap, HashSet};
+use honeycomb::prelude::OrbitPolicy;
+
+use rayon::prelude::*;
 
 /// Iterates on the primal vertices to create a new dual cell around it
 /// Uses hashmap for beta2 relations and hashset to avoid duplicating vertices
 pub fn dualize_map<T: CoordsFloat>(map: &CMap2<T>) -> CMap2<T> {
-    let mut dual_map: CMap2<T> = CMapBuilder::<2, _>::from_n_darts(0).build().unwrap();
-
-    // key : pair of primal vertices, value : dual dart
-    let mut dart_hashmap: HashMap<(u32, u32), u32> = HashMap::new();
-    // primal_face_id, says if we already created a dual vertex for it
-    let mut vertices_hashset: HashSet<u32> = HashSet::new();
-
     // Collect vertices with their adjacent vertices, filtering out boundary vertices
     let vertex_data: Vec<(u32, Vec<u32>)> = map
-        .iter_vertices()
+        .par_iter_vertices()
         .map(|vertex_id| (vertex_id, get_adjacent_vertices(map, vertex_id)))
         .filter(|(_, adj_vertices)| adj_vertices.len() >= 3)
         .collect();
 
-    // Allocate darts based on actual non-boundary vertex count
     let dual_dart_count = vertex_data.len() * 4;
-    dual_map.allocate_used_darts(dual_dart_count);
 
-    let iter_vertices_zipped =
-        vertex_data
-            .into_iter()
-            .scan(0, |state, (vertex_id, adj_vertices)| {
-                let current = *state;
-                *state += 4;
-                Some((vertex_id, adj_vertices, current + 1))
-            });
+    let dual_map = CMapBuilder::<2, T>::from_n_darts(dual_dart_count)
+        .build()
+        .unwrap();
+
+    let iter_vertices_zipped: Vec<(u32, Vec<u32>, u32)> = vertex_data
+        .into_iter()
+        .scan(0, |state, (vertex_id, adj_vertices)| {
+            let current = *state;
+            *state += 4;
+            Some((vertex_id, adj_vertices, current + 1))
+        })
+        .collect();
+
+    let par_iter_vertices = iter_vertices_zipped.into_par_iter();
 
     // Step 2: For each vertex in original map, create a dual face
-    for (vertex_id, adjacent_primal_vertices, new_dart) in iter_vertices_zipped {
-        if adjacent_primal_vertices.len() < 3 {
-            panic!("Boundary vertex encountered unexpectedly");
-        }
-        // We should only have quads now
-        //assert_eq!(adjacent_primal_vertices.len(), 4);
+    par_iter_vertices.for_each(|(vertex_id, adjacent_primal_vertices, new_dart)| {
+        // Collect the i_cell iterators for each adjacent vertex as Vec<Vec<u32>>
+        let adjacent_primal_vertices_darts: Vec<Vec<u32>> = adjacent_primal_vertices
+            .iter()
+            .map(|&v| map.i_cell::<0>(v).collect())
+            .collect();
 
         // If opposite exists we beta2 link to it
         // and write centroid if doesnt exist
-        for (i, &remote_primal_vertice) in adjacent_primal_vertices.iter().enumerate() {
-            let previous_dart = new_dart + ((i as u32 - 1) % 4); // previous for proper orientation
+        for i in 0..adjacent_primal_vertices.len() {
+            // dart goes from remote_primal_vertice to vertex_id
+            let &dart = adjacent_primal_vertices_darts[i]
+                .iter()
+                .find(|&&d| {
+                    let opposite = map.beta::<2>(d);
+                    map.vertex_id(opposite) == vertex_id
+                })
+                .unwrap();
+
             let current_new_dart = new_dart + i as u32;
 
-            // Write the centroid
-            if !vertices_hashset.contains(&map.face_id(remote_primal_vertice)) {
-                let centroid = calculate_face_centroid(map, remote_primal_vertice);
+            let centroid = calculate_face_centroid(map, dart);
+            dual_map.force_write_vertex(current_new_dart, centroid);
 
-                dual_map.force_write_vertex(previous_dart, centroid);
-                vertices_hashset.insert(map.face_id(remote_primal_vertice));
+            let opposite = map.beta::<2>(dart);
+            map.force_write_attribute::<B2Mapping>(opposite, B2Mapping(current_new_dart));
+            let attr = map.force_read_attribute::<B2Mapping>(dart);
+            if let Some(attr) = attr {
+                let dual_opposite_dart = attr.0;
+                let _ = dual_map.force_link::<2>(current_new_dart, dual_opposite_dart);
             }
-
-            if dart_hashmap.contains_key(&(map.vertex_id(remote_primal_vertice), vertex_id)) {
-                let dual_opposite_dart = *dart_hashmap
-                    .get(&(map.vertex_id(remote_primal_vertice), vertex_id))
-                    .unwrap();
-                dual_map
-                    .force_link::<2>(current_new_dart, dual_opposite_dart)
-                    .unwrap();
-            }
-
-            dart_hashmap.insert(
-                (vertex_id, map.vertex_id(remote_primal_vertice)),
-                current_new_dart,
-            );
         }
 
-        // Connect the darts with beta1 relations to form the dual face
         dual_map.force_link::<1>(new_dart, new_dart + 3).unwrap();
         dual_map
             .force_link::<1>(new_dart + 3, new_dart + 2)
@@ -79,70 +75,19 @@ pub fn dualize_map<T: CoordsFloat>(map: &CMap2<T>) -> CMap2<T> {
             .force_link::<1>(new_dart + 2, new_dart + 1)
             .unwrap();
         dual_map.force_link::<1>(new_dart + 1, new_dart).unwrap();
-    }
+    });
 
     dual_map
 }
 
-/// Get all faces around a vertex in order
 fn get_adjacent_vertices<T: CoordsFloat>(map: &CMap2<T>, vertex_id: u32) -> Vec<u32> {
-    assert_ne!(vertex_id, NULL_DART_ID);
-    let mut adj_vertices = Vec::new();
-    let mut adj_vertices_backward = Vec::new();
-    let mut dart = vertex_id;
-
-    adj_vertices.push(map.beta::<1>(dart));
-
-    let mut go_backward = false;
-    loop {
-        dart = map.beta::<2>(dart);
-        dart = map.beta::<1>(dart);
-
-        if dart == NULL_DART_ID {
-            go_backward = true;
-            break;
-        }
-        if dart == vertex_id {
-            break;
-        }
-
-        adj_vertices.push(map.beta::<1>(dart));
-    }
-    if go_backward {
-        dart = vertex_id;
-        loop {
-            dart = map.beta::<0>(dart);
-            dart = map.beta::<2>(dart);
-
-            if dart == NULL_DART_ID {
-                break;
-            }
-
-            adj_vertices_backward.push(map.beta::<1>(dart));
-        }
-    }
-
-    adj_vertices_backward.reverse();
-    adj_vertices.extend(adj_vertices_backward);
-
-    let adj_vertices_set: std::collections::HashSet<u32> = adj_vertices.iter().cloned().collect();
-    assert_eq!(adj_vertices.len(), adj_vertices_set.len());
-    assert!(
-        !adj_vertices.is_empty(),
-        "Vertex {} has less than 1 adj_vertices around it",
-        vertex_id
-    );
-
-    adj_vertices
+    map.orbit(OrbitPolicy::VertexLinear, vertex_id)
+        .map(|d| map.beta::<2>(d))
+        .collect::<Vec<u32>>()
 }
 
-/// Calculates the centroid of a face by averaging its vertex positions
 fn calculate_face_centroid<T: CoordsFloat>(map: &CMap2<T>, vertex_id: u32) -> Vertex2<T> {
-    let face_darts: Vec<u32> = map.i_cell::<2>(vertex_id).collect(); //i_cell2 is beta1 orbit
-
-    if face_darts.is_empty() {
-        return Vertex2(T::zero(), T::zero());
-    }
+    let face_darts: Vec<u32> = map.orbit(OrbitPolicy::Face, vertex_id).collect();
 
     let mut sum_x = T::zero();
     let mut sum_y = T::zero();

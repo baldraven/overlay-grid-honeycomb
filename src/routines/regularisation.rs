@@ -6,11 +6,11 @@ use honeycomb::core::{
     cmap::{CMap2, NULL_DART_ID},
     geometry::{CoordsFloat, Vertex2},
 };
+use rayon::prelude::*;
 
 pub fn regularize_map<T: CoordsFloat>(map: &mut CMap2<T>) {
-    // TODO: to parallelize
     let irregular_darts: Vec<u32> = map
-        .iter_faces()
+        .par_iter_faces()
         .flat_map(|face| {
             map.i_cell::<1>(face)
                 .filter(|&dart| !is_regular(map, dart))
@@ -34,15 +34,16 @@ pub fn regularize_map<T: CoordsFloat>(map: &mut CMap2<T>) {
                 Some((chain, current_start as u32))
             });
 
+    let par_chains_with_dart_ids = chains_with_dart_ids.collect::<Vec<_>>().into_par_iter();
+
     // Process each chain with its pre-allocated dart range
-    // TODO: Could parallelize this but not priority
-    for (chain, dart_counter) in chains_with_dart_ids {
+    par_chains_with_dart_ids.for_each(|(chain, dart_counter)| {
         assert_eq!(chain.len() % 2, 0, "Chain length must be even");
         regularize_consecutive_chain(map, &chain, dart_counter);
-    }
+    });
 }
 
-fn regularize_edge<T: CoordsFloat>(map: &mut CMap2<T>, edge_dart: u32, dart1: u32) -> u32 {
+fn regularize_edge<T: CoordsFloat>(map: &CMap2<T>, edge_dart: u32, dart1: u32) -> u32 {
     let next = map.beta::<1>(edge_dart);
     let next_next = map.beta::<1>(next);
     let prev = map.beta::<0>(edge_dart);
@@ -187,7 +188,7 @@ fn find_prev_consecutive_irregular<T: CoordsFloat>(map: &CMap2<T>, dart: u32) ->
 
 /// Regularizes a chain of consecutive irregular darts with pre-allocated dart IDs
 fn regularize_consecutive_chain<T: CoordsFloat>(
-    map: &mut CMap2<T>,
+    map: &CMap2<T>,
     chain: &[u32],
     dart_counter: u32,
 ) -> u32 {

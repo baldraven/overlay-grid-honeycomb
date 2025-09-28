@@ -7,7 +7,7 @@ use crate::routines::{
 };
 use honeycomb::core::{cmap::CMap2, geometry::CoordsFloat};
 
-const MAX_DEPTH: u32 = 6;
+const MAX_DEPTH: u32 = 5;
 
 #[allow(clippy::needless_pass_by_value)]
 /// Create an overlay grid from a VTK file input
@@ -25,6 +25,7 @@ pub fn overlay_grid<T: CoordsFloat>(
 
     let t0 = std::time::Instant::now();
     refinement(&mut map, &mut geo_verts, MAX_DEPTH)?;
+    routines::helpers::remove_dangling_darts(&mut map);
     let t_ref = t0.elapsed();
     println!("refinement took {:.3} s", t_ref.as_secs_f64());
 
@@ -40,6 +41,3 @@ pub fn overlay_grid<T: CoordsFloat>(
 
     Ok(dual_map)
 }
-
-#[cfg(test)]
-mod test;

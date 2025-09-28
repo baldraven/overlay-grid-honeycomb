@@ -14,8 +14,8 @@ readme = "README.md"
 honeycomb = { git = "https://github.com/LIHPC-Computational-Geometry/honeycomb", rev = "0ffd41c", features = ["render"]}
 thiserror = "1.0"
 vtkio = "0.6"
-morton-encoding = "2.0"
-num-traits = "0.2"
+rayon = "1.11.0"
+rand = "0.9.2"
 
 [features]
 default = []
