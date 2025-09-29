@@ -6,7 +6,7 @@ use honeycomb::core::geometry::CoordsFloat;
 use thiserror::Error;
 use vtkio::Vtk;
 
-use crate::model::Geometry2;
+use crate::model::{B2Mapping, Geometry2};
 
 use crate::model::{GeoVertices, IsIrregular, RefinementLevel, SiblingDartId};
 use honeycomb::core::{
@@ -92,13 +92,18 @@ pub fn compute_overlapping_grid_size<T: CoordsFloat>(
 }
 
 pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
-    let geo_verts = vec![
-        Vertex2::<T>(T::from(1.).unwrap(), T::from(1.).unwrap()),
-        Vertex2::<T>(T::from(3.).unwrap(), T::from(3.).unwrap()),
-        Vertex2::<T>(T::from(1.).unwrap(), T::from(3.).unwrap()),
-        Vertex2::<T>(T::from(3.).unwrap(), T::from(1.).unwrap()),
-        Vertex2::<T>(T::from(2.).unwrap(), T::from(2.).unwrap()),
-    ];
+    let nb_verts = 100;
+
+    // Generate random geo vertices within the -10 to 10 box
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let geo_verts: Vec<Vertex2<T>> = (0..nb_verts)
+        .map(|_| {
+            let x = T::from(rng.random_range(-10.0..=10.0)).unwrap();
+            let y = T::from(rng.random_range(-10.0..=10.0)).unwrap();
+            Vertex2(x, y)
+        })
+        .collect();
 
     // --- BUILD THE CMap2
     let map: CMap2<T> = CMapBuilder::<2, _>::from_n_darts(4)
@@ -106,6 +111,7 @@ pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
         .add_attribute::<GeoVertices>()
         .add_attribute::<SiblingDartId>()
         .add_attribute::<RefinementLevel>()
+        .add_attribute::<B2Mapping>()
         .build()
         .unwrap();
 
@@ -114,10 +120,10 @@ pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
     map.force_link::<1>(3, 4).unwrap();
     map.force_link::<1>(4, 1).unwrap();
 
-    map.force_write_vertex(1, Vertex2(T::from(0.0).unwrap(), T::from(0.0).unwrap()));
-    map.force_write_vertex(2, Vertex2(T::from(4.0).unwrap(), T::from(0.0).unwrap()));
-    map.force_write_vertex(3, Vertex2(T::from(4.0).unwrap(), T::from(4.0).unwrap()));
-    map.force_write_vertex(4, Vertex2(T::from(0.0).unwrap(), T::from(4.0).unwrap()));
+    map.force_write_vertex(1, Vertex2(T::from(-10.0).unwrap(), T::from(-10.0).unwrap()));
+    map.force_write_vertex(2, Vertex2(T::from(10.0).unwrap(), T::from(-10.0).unwrap()));
+    map.force_write_vertex(3, Vertex2(T::from(10.0).unwrap(), T::from(10.0).unwrap()));
+    map.force_write_vertex(4, Vertex2(T::from(-10.0).unwrap(), T::from(10.0).unwrap()));
 
     map.force_write_attribute::<GeoVertices>(1, GeoVertices((0u32, geo_verts.len() as u32)));
     map.force_write_attribute::<RefinementLevel>(1, RefinementLevel(0));
@@ -167,6 +173,7 @@ pub fn vtk_grid<T: CoordsFloat>(
         .add_attribute::<GeoVertices>()
         .add_attribute::<SiblingDartId>()
         .add_attribute::<RefinementLevel>()
+        .add_attribute::<B2Mapping>()
         .build()
         .unwrap();
 

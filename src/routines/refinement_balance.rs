@@ -1,7 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 use crate::{
-    model::{RefinementLevel, SiblingDartId},
+    model::SiblingDartId,
     routines::{edge_splitting::*, pre_processing::*},
 };
 use honeycomb::core::{
@@ -9,128 +9,169 @@ use honeycomb::core::{
     geometry::{CoordsFloat, Vertex2},
 };
 
-/// Performs refinement of cells that contain geo vertices
-/// Processes one level at a time to ensure proper ordering
+use rayon::prelude::*;
+
 pub fn refinement<T: CoordsFloat>(
     map: &mut CMap2<T>,
     geo_verts: &mut [Vertex2<T>],
     max_depth: u32,
 ) -> Result<(), OverlayGridError> {
-    let mut balance_pile = VecDeque::new();
-    let mut current_level = VecDeque::new();
-    let to_refine = refine_cell(map, 1, geo_verts);
-    current_level.push_back(to_refine);
+    let mut balance_pile = Vec::new();
+    let mut darts_to_refine = Vec::new();
 
-    // Process each refinement level
+    // Start by refining one cell to initialize the process
+    let dart = map.allocate_unused_darts(16);
+    let result = refine_cell(map, 1, geo_verts, dart);
+    let to_refine = result.children[0];
+    darts_to_refine.push(to_refine);
+    if !result.local_geo_verts.is_empty() {
+        geo_verts[result.start_end.0..result.start_end.1].copy_from_slice(&result.local_geo_verts);
+    }
+
+    // Main loop
     for depth in 0..max_depth {
-        assert_ne!(current_level.len(), 0);
+        let nb_allocations = 64 * darts_to_refine.len();
+        let new_dart = map.allocate_unused_darts(nb_allocations);
+        let chunks = (0..darts_to_refine.len()).map(|i| new_dart + (i as u32 * 64));
 
         println!(
             "Processing refinement level {} with {} pack of cells to refine",
             depth,
-            current_level.len()
+            darts_to_refine.len()
         );
 
-        let mut next_level = VecDeque::new();
+        let current_level_zipped: Vec<(u32, u32)> =
+            darts_to_refine.into_iter().zip(chunks).collect();
 
-        // Refine all cells at current level
-        // TODO: parallelize this
-        while let Some(working_dart) = current_level.pop_front() {
-            let parent_cells = refine_with_pairing(map, working_dart, geo_verts, &mut balance_pile);
-
-            // Add children to next level
-            for child_cell in parent_cells {
-                if child_cell != NULL_DART_ID {
-                    next_level.push_back(child_cell);
-                }
-            }
-        }
+        let mut next_darts_to_refine = Vec::new();
+        parallel_refine_with_pairing(
+            map,
+            current_level_zipped.into_par_iter(),
+            &mut next_darts_to_refine,
+            &mut balance_pile,
+            geo_verts,
+        );
 
         balancing(map, &mut balance_pile, geo_verts);
 
-        current_level = next_level;
+        darts_to_refine = next_darts_to_refine;
     }
 
     Ok(())
 }
 
-fn balancing<T: CoordsFloat>(
-    map: &mut CMap2<T>,
-    balance_pile: &mut VecDeque<u32>,
-    geo_verts: &mut [Vertex2<T>],
-) {
-    let mut seen_faces: HashSet<u32> = HashSet::new();
+/// Sanitizes the balance pile to remove duplicates and keep only one representative from each sibling group
+fn sanitize_balance_pile<T: CoordsFloat>(map: &CMap2<T>, balance_pile: &Vec<u32>) -> Vec<u32> {
+    let mut processed_faces = HashSet::new();
+    let mut sanitized = Vec::new();
 
-    while !balance_pile.is_empty() {
-        let face_dart = map.face_id(balance_pile.pop_front().unwrap());
-        if seen_faces.contains(&face_dart) {
+    for &face_dart in balance_pile {
+        if processed_faces.contains(&face_dart) {
             continue;
         }
 
-        if ensure_not_balanced(map, face_dart) {
-            // gather the 4 sibling faces (first ring) and insert them into seen_faces
-            let mut first_ring = Vec::with_capacity(4);
-            let mut current_dart = map.face_id(face_dart);
-            first_ring.push(current_dart);
-            for _ in 1..4 {
-                current_dart = map
-                    .force_read_attribute::<SiblingDartId>(current_dart)
-                    .unwrap()
-                    .0;
-                first_ring.push(current_dart);
-            }
+        // Get all 4 sibling faces in this group
+        let mut sibling_faces = Vec::with_capacity(4);
+        let mut current_face = face_dart;
+        sibling_faces.push(current_face);
 
-            refine_with_pairing(map, face_dart, geo_verts, balance_pile);
-
-            // gather the next-level siblings (3 successors for each of the 4 faces => 12 faces)
-            let mut second_ring = Vec::with_capacity(12);
-            for &f in &first_ring {
-                let mut current_dart = f;
-                for _ in 0..3 {
-                    current_dart = map
-                        .force_read_attribute::<SiblingDartId>(current_dart)
-                        .unwrap()
-                        .0;
-                    second_ring.push(current_dart);
+        // Follow the sibling chain to get all 4 faces
+        for _ in 1..4 {
+            if let Some(sibling_attr) = map.force_read_attribute::<SiblingDartId>(current_face) {
+                current_face = sibling_attr.0;
+                // Avoid infinite loops if there's a cycle shorter than 4
+                if !sibling_faces.contains(&current_face) {
+                    sibling_faces.push(current_face);
+                } else {
+                    break;
                 }
-            }
-            for &f in &first_ring {
-                seen_faces.insert(f);
-            }
-            for &f in &second_ring {
-                seen_faces.insert(f);
+            } else {
+                break;
             }
         }
+
+        for &sibling in &sibling_faces {
+            processed_faces.insert(sibling);
+        }
+
+        // Keep the original face_dart as the representative
+        sanitized.push(face_dart);
+    }
+
+    sanitized
+}
+
+fn parallel_refine_with_pairing<T: CoordsFloat>(
+    map: &mut CMap2<T>,
+    current_level_zipped: impl ParallelIterator<Item = (u32, u32)>,
+    next_level: &mut Vec<u32>,
+    balance_pile: &mut Vec<u32>,
+    geo_verts: &mut [Vertex2<T>],
+) {
+    let results: Vec<(Vec<u32>, Vec<u32>, Vec<Vertex2<T>>, (usize, usize))> = current_level_zipped
+        .map(|(working_dart, start_dart)| {
+            let result = refine_with_pairing(map, working_dart, start_dart, geo_verts);
+
+            let valid_children: Vec<u32> = result
+                .children
+                .into_iter()
+                .filter(|&cell| cell != NULL_DART_ID)
+                .collect();
+
+            (
+                valid_children,
+                result.balance_pile,
+                result.local_geo_verts,
+                result.start_end,
+            )
+        })
+        .collect();
+
+    // Merge results back into shared structures
+    for (children, local_pile, local_slice, start_end) in results {
+        next_level.extend(children);
+        balance_pile.extend(local_pile);
+        geo_verts[start_end.0..start_end.1].copy_from_slice(&local_slice);
     }
 }
 
-fn ensure_not_balanced<T: CoordsFloat>(map: &CMap2<T>, working_dart: u32) -> bool {
-    let face_id = map.face_id(working_dart);
+fn balancing<T: CoordsFloat>(
+    map: &mut CMap2<T>,
+    balance_pile: &mut Vec<u32>,
+    geo_verts: &mut [Vertex2<T>],
+) {
+    while !balance_pile.is_empty() {
+        //balance_pile.make_contiguous().shuffle(&mut rand::thread_rng());
 
-    // Get the current cell's refinement level
-    let current_level = map
-        .force_read_attribute::<RefinementLevel>(face_id)
-        .unwrap()
-        .0;
+        //sanitize the balance pile to avoid processing the same face multiple times including siblings
+        let sanitized_balance_pile = sanitize_balance_pile(map, balance_pile);
 
-    for dart in map.i_cell::<2>(face_id) {
-        let opposite = map.beta::<2>(dart);
-        if opposite == NULL_DART_ID {
-            continue; // Skip boundary edges
-        }
+        let nb_allocations = 64 * sanitized_balance_pile.len();
+        let new_dart = map.allocate_unused_darts(nb_allocations);
+        let chunks = (0..sanitized_balance_pile.len()).map(|i| new_dart + (i as u32 * 64));
 
-        let opposite_face_id = map.face_id(opposite);
-        let opposite_level = map
-            .force_read_attribute::<RefinementLevel>(opposite_face_id)
-            .unwrap()
-            .0;
+        let balance_pile_zipped: Vec<(u32, u32)> =
+            sanitized_balance_pile.into_iter().zip(chunks).collect();
 
-        // If there's a refinement level difference > 1, the cell is unbalanced
-        if (current_level as i32 - opposite_level as i32).abs() > 1 {
-            return true; // Cell needs balancing
+        let balance_pile_zipped = balance_pile_zipped.into_par_iter();
+
+        let results: Vec<(Vec<u32>, Vec<Vertex2<T>>, (usize, usize))> = balance_pile_zipped
+            .map(|(face_dart, start_dart)| {
+                let res = refine_with_pairing(map, face_dart, start_dart, geo_verts);
+
+                (res.balance_pile, res.local_geo_verts, res.start_end)
+            })
+            .collect();
+
+        // Merge results back into shared structures
+        balance_pile.clear();
+        for (local_pile, local_slice, start_end) in results {
+            if !local_pile.is_empty() {
+                balance_pile.extend(local_pile);
+            }
+            if start_end != (0, 0) {
+                geo_verts[start_end.0..start_end.1].copy_from_slice(&local_slice);
+            }
         }
     }
-
-    println!("is already balanced");
-    false
 }

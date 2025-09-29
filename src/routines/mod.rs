@@ -1,3 +1,4 @@
+pub mod debug;
 pub mod dualization;
 pub mod edge_splitting;
 pub mod helpers;

@@ -248,3 +248,21 @@ impl AttributeBind for RefinementLevel {
     type IdentifierType = FaceIdType;
     const BIND_POLICY: OrbitPolicy = OrbitPolicy::Face;
 }
+
+#[derive(Debug, Clone, Default, Copy, PartialEq)]
+pub struct B2Mapping(pub u32);
+impl AttributeUpdate for B2Mapping {
+    fn merge(attr1: Self, _attr2: Self) -> Result<Self, AttributeError> {
+        Ok(attr1)
+    }
+
+    fn split(attr: Self) -> Result<(Self, Self), AttributeError> {
+        Ok((attr, attr))
+    }
+}
+
+impl AttributeBind for B2Mapping {
+    type StorageType = AttrSparseVec<Self>;
+    type IdentifierType = DartIdType;
+    const BIND_POLICY: OrbitPolicy = OrbitPolicy::Edge;
+}
