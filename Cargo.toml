@@ -14,11 +14,13 @@ readme = "README.md"
 honeycomb = { git = "https://github.com/LIHPC-Computational-Geometry/honeycomb", rev = "0ffd41c", features = ["render"]}
 thiserror = "1.0"
 vtkio = "0.6"
+hwlocality = { version = "1.0.0-alpha.11", optional = true }
 rayon = "1.11.0"
 rand = "0.9.2"
 
 [features]
-default = []
+default = ["bind-threads"]
+bind-threads = ["dep:hwlocality"]
 
 [profile.profiling]
 inherits = "release"

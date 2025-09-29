@@ -1,6 +1,8 @@
+pub(crate) mod bind;
 pub(crate) mod model;
 pub(crate) mod routines;
 
+pub use crate::bind::bind_threads;
 use crate::routines::{
     dualization::dualize_map, pre_processing::*, refinement_balance::refinement,
     regularisation::regularize_map,
