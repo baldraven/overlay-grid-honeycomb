@@ -18,12 +18,19 @@ dualize()
 ```
 
 ### Usage
-To run with preset vertices :
-```cargo run --release```
-To run with vertices read from vtk file :
-```cargo run --release inputes/[file].vtk```
+Usage: overlay_grid [OPTIONS]
 
-To modify max depth : const in src/lib.rs
+Options:
+- -f, --vtk-file <VTK_FILE>    VTK file path to use as input
+- -n, --nb-verts <NB_VERTS>    Number of vertices to generate for random grid [default: 100]
+- -d, --max-depth <MAX_DEPTH>  Maximum refinement depth (default: 10) [default: 10]
+- -h, --help                   Print help
+
+Notes regarding multithreading:
+
+- Binding is only enabled if the feature bind-threads is enabled (which it is by default). This allows compiling without an hwloc install if needed.
+- The number of thread used by rayon now defaults to 1. A different value can be set using the RAYON_NUM_THREADS environment variable.
+- The binding policy an be changed by setting the RAYON_PROC_BIND environment variable. This has roughly the same effect as the OMP_PROC_BIND variable
 
 
 ### Cell division variable naming

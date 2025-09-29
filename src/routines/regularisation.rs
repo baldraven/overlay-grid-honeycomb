@@ -52,8 +52,8 @@ fn regularize_edge<T: CoordsFloat>(map: &CMap2<T>, edge_dart: u32, dart1: u32) -
     let edge_dart2 = map.beta::<1>(prev2);
 
     assert_ne!(next_opposite, NULL_DART_ID);
-    assert!(!is_regular(map, edge_dart2));
-    assert!(!is_regular(map, edge_dart));
+    debug_assert!(!is_regular(map, edge_dart2));
+    debug_assert!(!is_regular(map, edge_dart));
 
     map.force_remove_attribute::<IsIrregular>(edge_dart);
     map.force_remove_attribute::<IsIrregular>(edge_dart2);

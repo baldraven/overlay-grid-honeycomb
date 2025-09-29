@@ -82,12 +82,6 @@ fn try_getting_dart_origin_from_orbit<T: CoordsFloat>(
             break;
         }
     }
-    if found_vertex == Vertex2::<T>::from((T::zero(), T::zero())) {
-        println!(
-            "Warning: Dart {} and its orbit have no associated vertex!",
-            dart
-        );
-    }
     found_vertex
 }
 
@@ -115,12 +109,8 @@ pub fn collect_face_darts_tx<T: CoordsFloat>(
         }
         current_dart = map.beta_tx::<1>(trans, current_dart)?;
     }
-    // assert all face darts are non nil and they are 4 of them
 
     assert_eq!(face_darts.len(), 4);
-    for &d in &face_darts {
-        assert_ne!(d, NULL_DART_ID);
-    }
 
     // order the darts so the first face_dart is in SW quadrant
     let pos0 = dart_origin_tx(trans, map, face_darts[0])?;

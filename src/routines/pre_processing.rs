@@ -91,9 +91,7 @@ pub fn compute_overlapping_grid_size<T: CoordsFloat>(
     Ok([max_x, max_y, min_x, min_y])
 }
 
-pub fn manual_grid<T: CoordsFloat>() -> (CMap2<T>, Vec<Vertex2<T>>) {
-    let nb_verts = 100;
-
+pub fn manual_grid<T: CoordsFloat>(nb_verts: usize) -> (CMap2<T>, Vec<Vertex2<T>>) {
     // Generate random geo vertices within the -10 to 10 box
     use rand::Rng;
     let mut rng = rand::rng();

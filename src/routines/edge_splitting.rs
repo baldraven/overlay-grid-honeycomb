@@ -365,7 +365,6 @@ fn perform_cell_subdivision_tx<T: CoordsFloat>(
     let mut state = SubdivisionState::new();
 
     for (i, &edge_dart) in face_darts.iter().enumerate() {
-        assert!(i < 4, "E: face_darts has more than 4 darts");
         // Split boundary edge and create inner edge
         let dart1 = split_boundary_edge_tx(trans, map, edge_dart, start_dart + (i as u32 * 4))?;
         let (going_to_center, going_from_center) =
@@ -606,7 +605,7 @@ pub fn refine_cell<T: CoordsFloat>(
             current_start += quadrant_counts[i];
         }
 
-        assert_eq!(
+        debug_assert_eq!(
             quadrant_counts.iter().sum::<u32>(),
             parent_geo_range.1,
             "E: quadrant counts do not sum to parent range length"
